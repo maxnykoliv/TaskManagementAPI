@@ -1,388 +1,270 @@
 # Task Management API
 
-REST API для системи управління задачами на **FastAPI**. Користувачі створюють задачі, призначають виконавців, змінюють статуси за чіткими правилами, коментують, шукають, фільтрують і сортують задачі, а прострочені задачі автоматично скасовуються фоновим воркером.
+[![CI](https://github.com/maxnykoliv/TaskManagementAPI/actions/workflows/ci.yml/badge.svg)](https://github.com/maxnykoliv/TaskManagementAPI/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)
+![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
 
-## Зміст
+An async REST API for team task tracking. Users create tasks, assign them, move
+them through a strict status workflow, comment on them, and search, filter and
+sort the list. A background worker auto-cancels tasks that miss their deadline.
 
-- [Можливості](#можливості)
-- [Технологічний стек](#технологічний-стек)
-- [Швидкий старт](#швидкий-старт)
-- [Конфігурація](#конфігурація)
-- [Використання API](#використання-api)
-- [Бізнес-правила](#бізнес-правила)
-- [Архітектура](#архітектура)
-- [Модель даних](#модель-даних)
-- [Фонова задача](#фонова-задача)
-- [Тестування](#тестування)
-- [Локальна розробка](#локальна-розробка)
-- [Прийняті припущення](#прийняті-припущення)
-- [Усунення проблем](#усунення-проблем)
+The interesting parts are not the CRUD: they are the business rules enforced in
+the service layer, a race-free per-user task limit, and a test suite that runs
+every rule against a real PostgreSQL database.
 
-## Можливості
+## Highlights
 
-- Реєстрація та авторизація за **JWT** (OAuth2 Password flow, працює з кнопкою *Authorize* у Swagger).
-- CRUD задач: назва, опис, статус, пріоритет, виконавець, автор, дедлайн, дата створення та останнього оновлення.
-- Окремий endpoint для зміни статусу з контрольованими переходами (state machine).
-- Коментарі до задач із пагінацією.
-- Пошук за назвою та описом, фільтри (статус, пріоритет, виконавець, дедлайн), сортування (дата створення, дедлайн, пріоритет), пагінація.
-- Список прострочених задач і статистика (за статусами, пріоритетами, прострочені, активні).
-- Фонова задача, що періодично скасовує прострочені незавершені задачі.
-- Запуск однією командою через Docker Compose, міграції застосовуються автоматично.
+- **Async all the way down:** FastAPI, SQLAlchemy 2.0 (async) and asyncpg.
+- **Layered architecture:** router → service → repository, with a pure domain layer for the status state machine.
+- **Concurrency-safe invariants:** the "max 10 active tasks per assignee" rule is checked under a `SELECT … FOR UPDATE` row lock, so parallel requests can't bypass it.
+- **Auth:** JWT (OAuth2 password flow, works with Swagger's *Authorize* button), Argon2 password hashing off the event loop, and timing-safe login.
+- **Background worker:** a lifespan-managed asyncio task that runs one idempotent `UPDATE`, so it is safe to run on several replicas.
+- **Production basics:** Alembic migrations, Docker Compose, a non-root container with a healthcheck, pinned dependencies.
+- **CI:** ruff lint and format checks, migrations checked against the models (`alembic check`), 54 tests at 97% coverage on PostgreSQL 16, and a Docker build.
 
-## Технологічний стек
+## Tech stack
 
-| Компонент | Технологія |
+| Concern | Choice |
 |---|---|
-| Фреймворк | FastAPI |
-| ORM | SQLAlchemy 2 (async) + asyncpg |
-| База даних | PostgreSQL 16 |
-| Міграції | Alembic |
-| Валідація | Pydantic v2 |
-| Автентифікація | JWT (PyJWT), паролі хешуються Argon2 (pwdlib) |
-| Тести | Pytest, pytest-asyncio, httpx |
-| Оркестрація | Docker, Docker Compose |
+| Framework | FastAPI |
+| ORM / driver | SQLAlchemy 2.0 (async), asyncpg |
+| Database | PostgreSQL 16 |
+| Migrations | Alembic |
+| Validation | Pydantic v2 |
+| Auth | PyJWT (HS256), pwdlib / Argon2 |
+| Tests | pytest, pytest-asyncio, httpx, pytest-cov |
+| Tooling | ruff, Docker, GitHub Actions |
 
-## Швидкий старт
+## Quick start
 
-Потрібні лише **Docker** та **Docker Compose**.
+Requires Docker with Compose.
 
 ```bash
-# 1. Створіть файл конфігурації
 cp .env.example .env
-
-# 2. Згенеруйте секретний ключ і вставте його в SECRET_KEY у .env
+# put a random key into SECRET_KEY (must be at least 32 characters):
 python -c "import secrets; print(secrets.token_hex(32))"
 
-# 3. Запустіть
 docker compose up --build
 ```
 
-При старті автоматично:
+Compose starts PostgreSQL (and creates the `taskdb_test` database for tests),
+applies migrations, and starts the API together with the background worker.
 
-1. піднімається PostgreSQL (разом із тестовою базою `taskdb_test`);
-2. застосовуються міграції Alembic (`alembic upgrade head`);
-3. стартує API та фоновий воркер.
-
-Після запуску:
-
-| Адреса | Призначення |
+| URL | |
 |---|---|
 | http://localhost:8000/docs | Swagger UI |
 | http://localhost:8000/redoc | ReDoc |
-| http://localhost:8000/health | перевірка стану |
+| http://localhost:8000/health | Health check |
 
-Зупинити: `docker compose down` (дані зберігаються). Зупинити й видалити дані БД: `docker compose down -v`.
-
-## Конфігурація
-
-Усі налаштування задаються змінними оточення (файл `.env`).
-
-| Змінна | Опис | Приклад |
-|---|---|---|
-| `POSTGRES_USER` | користувач PostgreSQL | `taskuser` |
-| `POSTGRES_PASSWORD` | пароль PostgreSQL | `taskpass` |
-| `POSTGRES_DB` | назва основної БД | `taskdb` |
-| `DATABASE_URL` | URL основної БД | `postgresql+asyncpg://taskuser:taskpass@localhost:5432/taskdb` |
-| `TEST_DATABASE_URL` | URL тестової БД | `postgresql+asyncpg://taskuser:taskpass@localhost:5432/taskdb_test` |
-| `SECRET_KEY` | ключ підпису JWT, **щонайменше 32 байти** | результат `secrets.token_hex(32)` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | час життя токена, хв | `60` |
-| `OVERDUE_CHECK_INTERVAL` | період перевірки прострочених задач, сек | `60` |
-| `OVERDUE_WORKER_ENABLED` | вмикання фонового воркера | `true` |
-
-У Docker Compose хост БД для сервісу `api` автоматично підставляється як `db`. Значення `localhost` у `.env` потрібні для запуску на хост-машині.
-
-## Використання API
-
-Базовий префікс: `/api/v1`. Усі endpoints, крім реєстрації та логіну, потребують заголовка `Authorization: Bearer <token>`.
-
-### Швидкий сценарій у Swagger
-
-1. `POST /auth/register` — створіть користувача.
-2. Натисніть **Authorize**, введіть **email** у поле `username` та пароль (`client_id` і `client_secret` залишіть порожніми).
-3. `POST /tasks` — створіть задачу.
-4. `PATCH /tasks/{id}/status` — змініть статус.
-
-### Приклад через curl
+Run the tests inside the container:
 
 ```bash
-# реєстрація
-curl -X POST http://localhost:8000/api/v1/auth/register \
+docker compose run --rm api pytest
+```
+
+## API overview
+
+All routes are under `/api/v1` and, except register and login, require
+`Authorization: Bearer <token>`.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/auth/register` | Create an account |
+| POST | `/auth/login` | Get a JWT (form fields: `username` = email, `password`) |
+| GET | `/auth/me` | Current user |
+| POST | `/tasks` | Create a task |
+| GET | `/tasks` | List tasks with search, filters, sorting and pagination |
+| GET | `/tasks/overdue` | Tasks past their deadline that are not finished |
+| GET | `/tasks/stats` | Counts by status and priority, plus active and overdue counts |
+| GET | `/tasks/{id}` | Get a task |
+| PATCH | `/tasks/{id}` | Partially update a task (all fields except status) |
+| PATCH | `/tasks/{id}/status` | Change status through the state machine |
+| DELETE | `/tasks/{id}` | Delete a task |
+| POST | `/tasks/{id}/comments` | Add a comment |
+| GET | `/tasks/{id}/comments` | List comments (paginated) |
+
+### Example session
+
+```bash
+curl -X POST localhost:8000/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"alice@example.com","username":"alice","password":"password123"}'
 
-# логін (у полі username — email)
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-  -d "username=alice@example.com&password=password123" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/login \
+  -d "username=alice@example.com&password=password123" | jq -r .access_token)
 
-# створення задачі
-curl -X POST http://localhost:8000/api/v1/tasks \
+curl -X POST localhost:8000/api/v1/tasks \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"title":"Підготувати звіт","priority":"HIGH","deadline":"2030-01-01T12:00:00Z"}'
+  -d '{"title":"Prepare the report","priority":"HIGH","deadline":"2030-01-01T12:00:00Z"}'
 
-# зміна статусу
-curl -X PATCH http://localhost:8000/api/v1/tasks/1/status \
+curl -X PATCH localhost:8000/api/v1/tasks/1/status \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"status":"IN_PROGRESS"}'
 
-# пошук + фільтр + сортування + пагінація
-curl "http://localhost:8000/api/v1/tasks?search=звіт&priority=HIGH&sort_by=deadline&order=asc&page=1&size=20" \
+curl "localhost:8000/api/v1/tasks?search=report&priority=HIGH&sort_by=deadline&order=asc&page=1&size=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### Endpoints
+### Listing tasks
 
-| Метод | Шлях | Опис |
-|---|---|---|
-| POST | `/auth/register` | реєстрація користувача |
-| POST | `/auth/login` | отримання JWT (form: `username` = email, `password`) |
-| GET | `/auth/me` | поточний користувач |
-| POST | `/tasks` | створити задачу |
-| GET | `/tasks` | список задач (пошук, фільтри, сортування, пагінація) |
-| GET | `/tasks/overdue` | прострочені задачі |
-| GET | `/tasks/stats` | статистика |
-| GET | `/tasks/{id}` | отримати задачу |
-| PATCH | `/tasks/{id}` | редагувати задачу (без статусу) |
-| DELETE | `/tasks/{id}` | видалити задачу |
-| PATCH | `/tasks/{id}/status` | змінити статус |
-| POST | `/tasks/{id}/comments` | додати коментар |
-| GET | `/tasks/{id}/comments` | список коментарів (пагінація) |
-| GET | `/health` | перевірка стану сервісу |
+`GET /tasks` accepts `search` (case-insensitive, title and description),
+`status`, `priority`, `assignee_id`, `deadline_from`, `deadline_to`,
+`sort_by` (`created_at` | `deadline` | `priority`), `order` (`asc` | `desc`),
+`page` and `size` (1–100). Unknown parameters are rejected with `422`, so a
+typo is reported instead of silently returning unfiltered results.
 
-### Параметри `GET /tasks`
-
-| Параметр | Тип | Опис |
-|---|---|---|
-| `search` | string | пошук за назвою та описом (без урахування регістру) |
-| `status` | enum | `BACKLOG`, `IN_PROGRESS`, `REVIEW`, `DONE`, `CANCELLED` |
-| `priority` | enum | `LOW`, `MEDIUM`, `HIGH` |
-| `assignee_id` | int | фільтр за виконавцем |
-| `deadline_from`, `deadline_to` | datetime | діапазон дедлайну |
-| `sort_by` | enum | `created_at`, `deadline`, `priority` |
-| `order` | enum | `asc` (за замовчуванням) або `desc` |
-| `page` | int | номер сторінки, від 1 |
-| `size` | int | розмір сторінки, 1–100 (за замовчуванням 20) |
-
-Без `sort_by` задачі сортуються за пріоритетом (High → Medium → Low), а потім за найближчим дедлайном (задачі без дедлайну — в кінці). З `sort_by=priority` порядок задає `order`: `desc` — спочатку High.
-
-Формат відповіді зі списком:
+With no `sort_by`, tasks are ordered by priority (high first) and then by
+nearest deadline, with tasks that have no deadline last.
 
 ```json
 { "items": [ ... ], "total": 42, "page": 1, "size": 20, "pages": 3 }
 ```
 
-### Коди помилок
+### Errors
 
-| Код | Коли |
+Every error has the form `{"detail": "..."}`.
+
+| Status | Meaning |
 |---|---|
-| `401` | немає або недійсний токен, невірний логін/пароль |
-| `403` | користувач не є автором чи виконавцем задачі |
-| `404` | задачу, виконавця чи користувача не знайдено |
-| `409` | конфлікт стану: недозволений перехід, редагування/видалення заборонене станом, ліміт активних задач, дубль при реєстрації |
-| `422` | порушення правила валідації: дедлайн у минулому, `Done` без виконавця тощо |
+| `401` | Missing or invalid token, or wrong credentials |
+| `403` | The caller is neither the author nor the assignee of the task |
+| `404` | Task, assignee or user not found |
+| `409` | State conflict: illegal transition, editing a finished task, deleting an active task, task limit reached, duplicate account |
+| `422` | Validation or business rule: deadline in the past, `DONE` without an assignee, and so on |
 
-## Бізнес-правила
-
-### Статуси та переходи
+## Business rules
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Backlog
-    Backlog --> InProgress
-    Backlog --> Cancelled
-    InProgress --> Review
-    InProgress --> Cancelled
-    Review --> Done
-    Done --> [*]
-    Cancelled --> [*]
+    [*] --> BACKLOG
+    BACKLOG --> IN_PROGRESS
+    BACKLOG --> CANCELLED
+    IN_PROGRESS --> REVIEW
+    IN_PROGRESS --> CANCELLED
+    REVIEW --> DONE
+    DONE --> [*]
+    CANCELLED --> [*]
 ```
 
-Будь-який інший перехід, зокрема повернення на попередній статус, завершується помилкою `409`.
-
-### Правила
-
-| Правило | Відповідь |
+| Rule | Response |
 |---|---|
-| Перехід лише за схемою вище | `409` |
-| У `Done` не можна без виконавця | `422` |
-| У `Done` не можна, якщо дедлайн минув | `422` |
-| Дедлайн при створенні та редагуванні не може бути в минулому (перевіряється лише при зміні дедлайну) | `422` |
-| Після `Review` та `Done` виконавця змінювати заборонено | `422` |
-| Задачі в `Done` та `Cancelled` не редагуються | `409` |
-| Задачу в `In Progress` або `Review` не можна видалити | `409` |
-| Не більше **10 активних задач** на виконавця (`Backlog`, `In Progress`, `Review`) | `409` |
-| Статус змінюється лише через `PATCH /tasks/{id}/status` | поле `status` у `PATCH /tasks/{id}` ігнорується |
+| Only the transitions above are allowed, with no going back | `409` |
+| A task can't become `DONE` without an assignee | `422` |
+| A task can't become `DONE` after its deadline has passed | `422` |
+| Deadlines can't be set in the past (checked only when the deadline changes) | `422` |
+| The assignee is frozen once a task reaches `REVIEW` | `422` |
+| `DONE` and `CANCELLED` tasks are read-only | `409` |
+| `IN_PROGRESS` and `REVIEW` tasks can't be deleted | `409` |
+| At most **10 active tasks** (`BACKLOG`, `IN_PROGRESS`, `REVIEW`) per assignee | `409` |
+| Status changes only through `PATCH /tasks/{id}/status` | `status` in `PATCH /tasks/{id}` is rejected |
 
-Перевірка ліміту активних задач виконується під блокуванням рядка користувача (`SELECT ... FOR UPDATE`), тому паралельні запити не можуть його обійти.
+`PATCH /tasks/{id}` is a true partial update: omitted fields are untouched,
+`"assignee_id": null` unassigns and `"deadline": null` clears the deadline.
 
-### Оновлення через PATCH
-
-`PATCH /tasks/{id}` змінює лише передані поля. `"assignee_id": null` знімає виконавця, `"deadline": null` прибирає дедлайн. Поля `title` та `priority` не можуть бути `null`.
-
-## Архітектура
-
-Шарувата архітектура: **Router → Service → Repository → DB**.
-
-- **Router** приймає запити, валідує вхідні дані через Pydantic, викликає сервіс.
-- **Service** містить усю бізнес-логіку та керує транзакціями.
-- **Repository** інкапсулює запити SQLAlchemy.
-- **Domain** — enum-и та state machine статусів (чисті функції, без залежності від БД).
+## Architecture
 
 ```
-.
-├── app/
-│   ├── api/
-│   │   ├── deps.py              # залежності: сесія, поточний користувач, сервіси
-│   │   └── v1/                  # auth, tasks, comments, router
-│   ├── background/
-│   │   └── overdue_worker.py    # автоскасування прострочених задач
-│   ├── core/
-│   │   ├── config.py            # налаштування (pydantic-settings)
-│   │   ├── security.py          # JWT та хешування паролів
-│   │   └── exceptions.py        # доменні винятки та їх обробники
-│   ├── db/                      # Base, async engine, сесія
-│   ├── domain/
-│   │   ├── enums.py             # TaskStatus, TaskPriority
-│   │   └── status_machine.py    # дозволені переходи
-│   ├── models/                  # SQLAlchemy-моделі
-│   ├── repositories/            # доступ до даних
-│   ├── schemas/                 # Pydantic-схеми
-│   ├── services/                # бізнес-логіка
-│   └── main.py                  # застосунок, lifespan
-├── alembic/                     # міграції
-├── docker/postgres/             # init-скрипт тестової БД
-├── tests/
-│   ├── unit/                    # state machine
-│   └── api/                     # API-тести
-├── Dockerfile
-├── docker-compose.yaml
-└── requirements.txt / requirements-dev.txt
+app/
+├── api/            # HTTP layer: routers, dependency wiring (session, current user, services)
+├── services/       # business rules and transaction boundaries
+├── repositories/   # SQLAlchemy queries, nothing else
+├── domain/         # enums and the status state machine (pure, no I/O)
+├── models/         # ORM models
+├── schemas/        # Pydantic request/response models
+├── background/     # overdue worker
+├── core/           # settings, security, exception → HTTP mapping
+└── db/             # engine and session factory
 ```
 
-## Модель даних
+- **Routers** stay thin: they validate input and delegate to a service.
+- **Services** own the rules and the transaction. They raise domain exceptions (`ConflictError`, `BusinessRuleError`, …), and a single handler maps each one to an HTTP status.
+- **Repositories** keep SQL in one place, so services read as business logic.
+- **Domain** has no framework imports, so the state machine is unit-tested in isolation.
+
+### Data model
 
 ```mermaid
 erDiagram
-    USERS ||--o{ TASKS : "автор"
-    USERS ||--o{ TASKS : "виконавець"
-    USERS ||--o{ COMMENTS : "пише"
-    TASKS ||--o{ COMMENTS : "має"
-
-    USERS {
-        int id PK
-        string email UK
-        string username UK
-        string hashed_password
-        bool is_active
-        datetime created_at
-    }
-    TASKS {
-        int id PK
-        string title
-        text description
-        enum status
-        enum priority
-        int assignee_id FK
-        int author_id FK
-        datetime deadline
-        datetime created_at
-        datetime updated_at
-    }
-    COMMENTS {
-        int id PK
-        int task_id FK
-        int author_id FK
-        text text
-        datetime created_at
-    }
+    USERS ||--o{ TASKS : authors
+    USERS ||--o{ TASKS : "is assigned"
+    USERS ||--o{ COMMENTS : writes
+    TASKS ||--o{ COMMENTS : has
 ```
 
-Індекси: `tasks(assignee_id, status)` для перевірки ліміту, `tasks(status, deadline)` для overdue та воркера, `tasks(title)`, `users(email)`, `comments(task_id)`. При видаленні задачі її коментарі видаляються каскадно, а при видаленні виконавця `assignee_id` стає `NULL`.
+Indexes follow the hot queries: `tasks(assignee_id, status)` for the
+active-task limit, `tasks(status, deadline)` for the overdue list and the
+worker, plus `tasks(title)`, `users(email)` and `comments(task_id)`. Deleting a
+task cascades to its comments, and deleting a user unassigns their tasks.
 
-## Фонова задача
+## Design decisions
 
-Вбудований `BackgroundTasks` у FastAPI виконується лише після відповіді на запит і не вміє працювати періодично. Тому воркер реалізовано як `asyncio`-задачу, що стартує у `lifespan` застосунку.
+- **Row lock for the task limit.** Counting active tasks and then inserting is a classic check-then-act race. The service locks the assignee's `users` row (`FOR UPDATE`) before counting, which serializes concurrent assignments to the same person without a table-wide lock.
+- **Worker as a lifespan task, not `BackgroundTasks`.** FastAPI's `BackgroundTasks` runs once after a response and can't schedule periodic work. The worker is an asyncio task started and cancelled in the app's `lifespan`, and a failing iteration is logged without stopping the loop.
+- **One idempotent statement.** Each tick runs `UPDATE tasks SET status = 'CANCELLED' WHERE deadline < now() AND status NOT IN ('DONE', 'CANCELLED')`. Running it on several replicas at once is harmless, so no leader election is needed at this scale. It bypasses the user-facing state machine on purpose: auto-cancelling a task in `REVIEW` is a system action.
+- **Timing-safe login.** For an unknown email the service still verifies the password against a dummy Argon2 hash, so response time doesn't reveal which emails exist. Hashing runs in a thread pool, because Argon2 is deliberately CPU-heavy and would otherwise block the event loop.
+- **Access model.** Any authenticated user can read and comment on tasks (a shared team board). Only the author or the assignee can edit, delete or move a task. The rule is in one place, `TaskService._ensure_participant`.
+- **Time.** Deadlines are compared with the current instant in UTC, and naive datetimes are treated as UTC.
+- **Hard delete.** Tasks are physically deleted. An audit trail would call for soft delete or an events table instead.
 
-Кожні `OVERDUE_CHECK_INTERVAL` секунд виконується один атомарний запит:
+## Known limitations and next steps
 
-```sql
-UPDATE tasks SET status = 'CANCELLED', updated_at = now()
-WHERE deadline < now() AND status NOT IN ('DONE', 'CANCELLED');
-```
+- Registration returns `409` for a taken email, which by itself reveals which accounts exist. A public product would move to email verification and a uniform response.
+- No refresh tokens or token revocation: access tokens are short-lived HS256 JWTs.
+- `GET /tasks/overdue` isn't paginated.
+- Offset pagination gets slower on deep pages. Keyset pagination on `(sort key, id)` would fix that.
+- `ILIKE` search doesn't use an index. A `pg_trgm` GIN index or full-text search would make it scale.
+- No rate limiting on `/auth/login`.
 
-- Запит **ідемпотентний**: кілька процесів або повторні запуски не шкодять один одному.
-- Помилка в одній ітерації логується й не зупиняє воркер.
-- При зупинці застосунку задача коректно скасовується.
-- Вимкнути воркер: `OVERDUE_WORKER_ENABLED=false`.
+## Local development
 
-## Тестування
-
-Набір складається з unit-тестів state machine та API-тестів основного функціоналу: автентифікація, CRUD, усі бізнес-правила, ліміт активних задач, пошук, фільтри, сортування, пагінація, коментарі, overdue, статистика та фоновий воркер.
-
-Тести використовують окрему БД `taskdb_test`. Для кожного тесту схема створюється й видаляється заново. Якщо `TEST_DATABASE_URL` порожній або збігається з `DATABASE_URL`, запуск зупиняється, тож робочі дані не постраждають.
-
-**У контейнері:**
+Requires Python 3.12+ and a running PostgreSQL. The simplest option is
+`docker compose up -d db`.
 
 ```bash
-docker compose run --rm api pytest -q
-```
-
-**Локально** (потрібна запущена БД):
-
-```bash
-docker compose up -d db
-pytest -v
-```
-
-Якщо том PostgreSQL створено до появи init-скрипта, тестову БД можна створити вручну:
-
-```bash
-docker compose exec db psql -U taskuser -d taskdb -c "CREATE DATABASE taskdb_test;"
-```
-
-## Локальна розробка
-
-Потрібен Python 3.12 або новіший.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
+cp .env.example .env              # and set SECRET_KEY
 
-docker compose up -d db            # лише база даних
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Корисні команди Alembic:
+Checks (the same ones CI runs):
 
 ```bash
-alembic revision --autogenerate -m "опис зміни"   # нова міграція
-alembic upgrade head                               # застосувати
-alembic downgrade -1                               # відкотити останню
-alembic check                                      # чи збігаються моделі та міграції
+ruff check . && ruff format --check .
+alembic check                     # models and migrations are in sync
+pytest --cov                      # needs TEST_DATABASE_URL
 ```
 
-## Прийняті припущення
+Every test gets a freshly created schema in the separate `taskdb_test`
+database. The suite refuses to start if `TEST_DATABASE_URL` is unset or equal to
+`DATABASE_URL`, so it can never wipe real data.
 
-Окремі місця ТЗ допускають кілька трактувань. Прийняті рішення:
+### Configuration
 
-- **«Todo»** у правилі про ліміт активних задач трактується як **Backlog**, оскільки такого статусу в переліку немає.
-- **Права доступу.** Змінювати задачу, видаляти її та міняти статус може **автор або виконавець**. Переглядати та коментувати задачі може будь-який авторизований користувач. Правило зосереджене в `TaskService._ensure_participant`.
-- **Дедлайн** порівнюється з поточним моментом (UTC), а не лише з датою. Значення без часового поясу вважаються UTC.
-- **Автоскасування** може скасувати й задачу в `Review`. Це системний перехід, він обходить таблицю переходів, доступну користувачам.
-- **Коментувати** можна задачі в будь-якому статусі, зокрема `Done` та `Cancelled`: заборона редагування стосується самої задачі.
-- **Ліміт активних задач** рахується по виконавцю. Задачі без виконавця в ліміті не враховуються.
-- Видалення задачі фізичне (не soft delete).
+| Variable | Description | Default |
+|---|---|---|
+| `DATABASE_URL` | SQLAlchemy async URL | required |
+| `TEST_DATABASE_URL` | Database for the test suite | — |
+| `SECRET_KEY` | JWT signing key, at least 32 characters | required |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Token lifetime in minutes | `60` |
+| `OVERDUE_CHECK_INTERVAL` | Worker period in seconds | `60` |
+| `OVERDUE_WORKER_ENABLED` | Run the background worker | `true` |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Used by Docker Compose | — |
 
-## Усунення проблем
+### Troubleshooting
 
-| Симптом | Причина та рішення |
+| Symptom | Fix |
 |---|---|
-| `401 Not authenticated` у Swagger | не натиснуто **Authorize**; логін виконується через email, а не username |
-| `404 Assignee not found` при створенні | у Swagger за замовчуванням підставляється `assignee_id: 0`; вкажіть `null` або id існуючого користувача |
-| `422 Deadline cannot be in the past` | дедлайн уже минув; задайте дату в майбутньому |
-| `connection refused` при запуску Alembic/pytest на хості | не запущена БД: `docker compose up -d db`; перевірте, що порт 5432 вільний |
-| У логах `relation "tasks" does not exist` | не застосовано міграції; перевірте, що файл міграції є в `alembic/versions/` |
-| `Is a directory` для init-скрипта БД | Docker створив папку замість файлу; видаліть її й створіть `docker/postgres/init-test-db.sql` |
-| `InsecureKeyLengthWarning` | `SECRET_KEY` коротший за 32 байти; згенеруйте новий |
-| Тести зупиняються з повідомленням про `TEST_DATABASE_URL` | задайте його в `.env` так, щоб він відрізнявся від `DATABASE_URL` |
+| `401` in Swagger | Click **Authorize** and log in with your **email** in the `username` field |
+| `404 Assignee not found` when creating from Swagger | Swagger pre-fills `assignee_id: 0`. Use `null` or a real user id |
+| App fails at startup with a `SECRET_KEY` validation error | The key is shorter than 32 characters. Generate a new one |
+| `relation "tasks" does not exist` | Run `alembic upgrade head` |
+| Tests can't find `taskdb_test` | The DB volume predates the init script: `docker compose exec db psql -U taskuser -d taskdb -c "CREATE DATABASE taskdb_test;"` |
+
+## License
+
+[Apache 2.0](LICENSE)
