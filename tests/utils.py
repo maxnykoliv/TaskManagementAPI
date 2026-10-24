@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import update
 
@@ -6,7 +6,7 @@ from app.models.task import Task
 
 
 def iso_in(**delta) -> str:
-    return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+    return (datetime.now(UTC) + timedelta(**delta)).isoformat()
 
 
 async def create_task(client, headers: dict, **overrides) -> dict:
@@ -27,6 +27,6 @@ async def force_deadline_past(session_maker, task_id: int) -> None:
         await session.execute(
             update(Task)
             .where(Task.id == task_id)
-            .values(deadline=datetime.now(timezone.utc) - timedelta(hours=1))
+            .values(deadline=datetime.now(UTC) - timedelta(hours=1))
         )
         await session.commit()

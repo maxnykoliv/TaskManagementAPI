@@ -10,12 +10,13 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.user_repo import UserRepository
 from app.services.auth_service import AuthService
-from app.services.task_service import TaskService
 from app.services.comment_service import CommentService
+from app.services.task_service import TaskService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
 
 def get_comment_service(db: DbSession) -> CommentService:
     return CommentService(db)
@@ -23,11 +24,13 @@ def get_comment_service(db: DbSession) -> CommentService:
 
 CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
 
+
 def get_task_service(db: DbSession) -> TaskService:
     return TaskService(db)
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
 
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], db: DbSession
