@@ -36,9 +36,7 @@ async def test_done_requires_assignee(client, alice):
     assert r.status_code == 422
 
 
-async def test_done_fails_when_deadline_expired(
-    client, session_maker, alice, bob
-):
+async def test_done_fails_when_deadline_expired(client, session_maker, alice, bob):
     t = await create_task(
         client, alice["headers"], assignee_id=bob["id"], deadline=iso_in(hours=1)
     )

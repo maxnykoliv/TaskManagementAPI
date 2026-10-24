@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.db.session import SessionLocal
 from app.repositories.task_repo import TaskRepository
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 async def cancel_overdue_once(session_factory=SessionLocal) -> int:
     async with session_factory() as session:
-        count = await TaskRepository(session).cancel_overdue(datetime.now(timezone.utc))
+        count = await TaskRepository(session).cancel_overdue(datetime.now(UTC))
         await session.commit()
     if count:
         logger.info("Auto-cancelled %d overdue task(s)", count)

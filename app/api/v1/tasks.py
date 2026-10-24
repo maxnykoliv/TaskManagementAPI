@@ -38,7 +38,7 @@ async def list_tasks(
     )
 
 
-# Статичні шляхи мають бути ДО "/{task_id}"
+# Static paths must be registered before "/{task_id}"
 @router.get("/overdue", response_model=list[TaskOut])
 async def overdue_tasks(service: TaskServiceDep, current_user: CurrentUser):
     return await service.overdue()
@@ -75,8 +75,6 @@ async def change_task_status(
 
 
 @router.delete("/{task_id}", status_code=204)
-async def delete_task(
-    task_id: int, service: TaskServiceDep, current_user: CurrentUser
-):
+async def delete_task(task_id: int, service: TaskServiceDep, current_user: CurrentUser):
     await service.delete(task_id, current_user)
     return Response(status_code=204)

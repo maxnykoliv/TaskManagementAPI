@@ -1,3 +1,8 @@
+import asyncio
+
+import pytest
+
+from app.background import overdue_worker
 from app.background.overdue_worker import cancel_overdue_once
 from tests.utils import create_task, force_deadline_past, iso_in, set_status
 
@@ -49,5 +54,24 @@ async def test_background_worker_cancels_overdue(client, session_maker, alice):
     r = await client.get(f"/api/v1/tasks/{t1['id']}", headers=alice["headers"])
     assert r.json()["status"] == "BACKLOG"
 
-    # повторний запуск нічого не змінює
+    # a second run is a no-op
     assert await cancel_overdue_once(session_maker) == 0
+
+
+async def test_worker_survives_failed_iteration(monkeypatch):
+    calls = 0
+
+    async def flaky_iteration():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database unavailable")
+        if calls == 3:
+            raise asyncio.CancelledError
+        return 0
+
+    monkeypatch.setattr(overdue_worker, "cancel_overdue_once", flaky_iteration)
+
+    with pytest.raises(asyncio.CancelledError):
+        await overdue_worker.run(interval=0)
+    assert calls == 3

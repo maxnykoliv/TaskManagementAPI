@@ -7,6 +7,8 @@ from app.domain.enums import TaskPriority, TaskStatus
 
 
 class TaskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
@@ -15,6 +17,9 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
+    # status is deliberately absent: it only changes via PATCH /tasks/{id}/status
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     priority: TaskPriority | None = None

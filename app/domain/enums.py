@@ -1,7 +1,7 @@
 import enum
 
 
-class TaskStatus(str, enum.Enum):
+class TaskStatus(enum.StrEnum):
     BACKLOG = "BACKLOG"
     IN_PROGRESS = "IN_PROGRESS"
     REVIEW = "REVIEW"
@@ -9,7 +9,7 @@ class TaskStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
-class TaskPriority(str, enum.Enum):
+class TaskPriority(enum.StrEnum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"

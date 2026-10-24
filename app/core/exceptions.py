@@ -1,11 +1,13 @@
+from typing import ClassVar
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 
 class AppError(Exception):
-    status_code = 400
-    default_detail = "Application error"
-    headers: dict[str, str] | None = None
+    status_code: ClassVar[int] = 400
+    default_detail: ClassVar[str] = "Application error"
+    headers: ClassVar[dict[str, str] | None] = None
 
     def __init__(self, detail: str | None = None):
         self.detail = detail or self.default_detail
@@ -30,7 +32,7 @@ class BusinessRuleError(AppError):
 class UnauthorizedError(AppError):
     status_code = 401
     default_detail = "Could not validate credentials"
-    headers = {"WWW-Authenticate": "Bearer"}
+    headers: ClassVar[dict[str, str] | None] = {"WWW-Authenticate": "Bearer"}
 
 
 class ForbiddenError(AppError):

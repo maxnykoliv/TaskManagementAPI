@@ -42,11 +42,12 @@ async def test_update_with_past_deadline_fails(client, alice):
 
 async def test_status_cannot_be_changed_via_patch(client, alice):
     t = await create_task(client, alice["headers"])
-    await client.patch(
+    r = await client.patch(
         f"/api/v1/tasks/{t['id']}",
         json={"status": "DONE"},
         headers=alice["headers"],
     )
+    assert r.status_code == 422
     r = await client.get(f"/api/v1/tasks/{t['id']}", headers=alice["headers"])
     assert r.json()["status"] == "BACKLOG"
 
@@ -151,6 +152,25 @@ async def test_search_and_filters(client, alice, bob):
 
     r = await client.get("/api/v1/tasks?status=DONE", headers=h)
     assert r.json()["total"] == 0
+
+
+async def test_deadline_range_filter(client, alice):
+    h = alice["headers"]
+    await create_task(client, h, title="soon", deadline=iso_in(days=1))
+    await create_task(client, h, title="later", deadline=iso_in(days=10))
+    await create_task(client, h, title="no deadline")
+
+    r = await client.get(
+        "/api/v1/tasks",
+        params={"deadline_from": iso_in(days=5), "deadline_to": iso_in(days=20)},
+        headers=h,
+    )
+    assert [t["title"] for t in r.json()["items"]] == ["later"]
+
+
+async def test_unknown_query_param_rejected(client, alice):
+    r = await client.get("/api/v1/tasks?colour=red", headers=alice["headers"])
+    assert r.status_code == 422
 
 
 async def test_pagination(client, alice):

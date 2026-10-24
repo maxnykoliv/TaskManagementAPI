@@ -21,12 +21,12 @@ def test_allowed(current, target):
 @pytest.mark.parametrize(
     "current,target",
     [
-        (S.IN_PROGRESS, S.BACKLOG),   # назад
-        (S.REVIEW, S.IN_PROGRESS),    # назад
-        (S.BACKLOG, S.DONE),          # стрибок
-        (S.REVIEW, S.CANCELLED),      # у ТЗ не дозволено
-        (S.DONE, S.IN_PROGRESS),      # з фінального
-        (S.CANCELLED, S.BACKLOG),     # з фінального
+        (S.IN_PROGRESS, S.BACKLOG),  # backwards
+        (S.REVIEW, S.IN_PROGRESS),  # backwards
+        (S.BACKLOG, S.DONE),  # skips a step
+        (S.REVIEW, S.CANCELLED),  # review can only go to done
+        (S.DONE, S.IN_PROGRESS),  # from a final state
+        (S.CANCELLED, S.BACKLOG),  # from a final state
     ],
 )
 def test_forbidden(current, target):

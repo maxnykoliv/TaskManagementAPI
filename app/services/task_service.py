@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,11 +22,11 @@ NON_NULLABLE_FIELDS = {"title", "priority"}
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 class TaskService:
@@ -57,9 +57,7 @@ class TaskService:
             assignee_id, exclude_task_id
         )
         if active >= MAX_ACTIVE_TASKS:
-            raise ConflictError(
-                f"User already has {MAX_ACTIVE_TASKS} active tasks"
-            )
+            raise ConflictError(f"User already has {MAX_ACTIVE_TASKS} active tasks")
 
     async def _get_locked(self, task_id: int) -> Task:
         task = await self.tasks.get_for_update(task_id)
